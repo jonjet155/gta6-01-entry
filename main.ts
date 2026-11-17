@@ -15,13 +15,43 @@
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:
 //   mkdir -p out && MAKEFUN_OUTPUT_DIR=out node main.ts
 
-import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { cpSync, existsSync, mkdirSync, readdirSync, statSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildDossier } from './vendor/makefun-game.ts';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const out = process.env.MAKEFUN_OUTPUT_DIR ?? '/output';
+
+// The entry is only as good as its screenshots: refuse to hand in a dossier
+// with more than four, or any one over the scorer's 256 KiB cap.
+const SHOT_MAX = 4;
+const SHOT_MAX_BYTES = 262144;
+const shotDir = join(here, 'screenshots');
+const shots = existsSync(shotDir) ? readdirSync(shotDir).filter((name) => /\.(jpe?g|png|webp)$/i.test(name)).sort() : [];
+if (shots.length === 0) {
+  console.error('error: no screenshots in screenshots/ — capture them before handing in');
+  process.exitCode = 1;
+  process.exit(1);
+}
+if (shots.length > SHOT_MAX) {
+  console.error(`error: ${shots.length} screenshots, the scorer takes at most ${SHOT_MAX}`);
+  process.exitCode = 1;
+  process.exit(1);
+}
+for (const name of shots) {
+  const size = statSync(join(shotDir, name)).size;
+  if (size > SHOT_MAX_BYTES) {
+    console.error(`error: screenshots/${name} is ${size} bytes, over the ${SHOT_MAX_BYTES} byte cap`);
+    process.exitCode = 1;
+    process.exit(1);
+  }
+}
+if (!existsSync(join(here, 'game', 'index.html'))) {
+  console.error('error: game/index.html is missing');
+  process.exitCode = 1;
+  process.exit(1);
+}
 
 mkdirSync(out, { recursive: true });
 cpSync(join(here, 'game'), join(out, 'game'), { recursive: true });
@@ -42,3 +72,4 @@ writeFileSync(
     game_path_max_bytes: 1000,
   }),
 );
+console.log(`solmar heat: ${shots.length} screenshot(s) (${shots.join(', ')}) copied to ${out}`);

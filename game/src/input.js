@@ -1,18 +1,24 @@
 // Keyboard + mouse: WASD/arrows to move and drive, E to enter a car or work a
-// mission marker, F or click to shove, Enter/Space to confirm, P or Escape to pause.
+// mission marker, F or click to shove, H to honk, M to mute, Enter/Space to
+// confirm, P or Escape to pause.
+//
+// Edge presses are tracked per key, and each reader only consumes the keys it
+// owns: takeActions() eats Enter/Space/P/Escape and leaves E, F and H alone,
+// so a tap on E still reaches the world after the title screen has had its say.
 export const ACTION_NONE = 0;
 export const ACTION_CONFIRM = 1;
 export const ACTION_PAUSE = 2;
+export const ACTION_MUTE = 4;
+
+const CONFIRM_CODES = ['Enter', 'Space'];
+const PAUSE_CODES = ['KeyP', 'Escape'];
+const MUTE_CODES = ['KeyM'];
 
 export function createInput(canvas) {
   const keys = new Set();
   const pressed = new Set();
   let mouse = { x: 0, y: 0 };
   let clicked = false;
-
-  function codeOf(event) {
-    return event.code;
-  }
 
   window.addEventListener('keydown', (event) => {
     if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight', 'Space'].includes(event.code)) event.preventDefault();
@@ -39,6 +45,11 @@ export function createInput(canvas) {
     return codes.some((c) => pressed.has(c));
   }
 
+  /** Forget only the given codes, so other readers still see their own keys. */
+  function consume(...codes) {
+    for (const code of codes) pressed.delete(code);
+  }
+
   return {
     /** Held movement: { x, y } in screen space, normalised. */
     direction() {
@@ -58,23 +69,24 @@ export function createInput(canvas) {
         right: has('KeyD', 'ArrowRight'),
         enter: wasPressed('KeyE'),
         punch: wasPressed('KeyF') || clicked,
+        honk: wasPressed('KeyH'),
         dirX: dir.x,
         dirY: dir.y,
         mouseX: mouse.x,
         mouseY: mouse.y,
       };
-      pressed.clear();
+      consume('KeyE', 'KeyF', 'KeyH');
       clicked = false;
       return state;
     },
 
-    /** One-shot screen actions (confirm / pause), consumed on read. */
+    /** One-shot screen actions (confirm / pause / mute), consumed on read. */
     takeActions() {
       let actions = ACTION_NONE;
-      if (wasPressed('Enter', 'Space')) actions |= ACTION_CONFIRM;
-      if (wasPressed('KeyP', 'Escape')) actions |= ACTION_PAUSE;
-      pressed.clear();
-      clicked = false;
+      if (wasPressed(...CONFIRM_CODES)) actions |= ACTION_CONFIRM;
+      if (wasPressed(...PAUSE_CODES)) actions |= ACTION_PAUSE;
+      if (wasPressed(...MUTE_CODES)) actions |= ACTION_MUTE;
+      consume(...CONFIRM_CODES, ...PAUSE_CODES, ...MUTE_CODES);
       return actions;
     },
 

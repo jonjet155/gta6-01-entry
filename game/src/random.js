@@ -26,6 +26,40 @@ export function pick(rng, items) {
   return items[Math.floor(rng() * items.length)];
 }
 
+/** True with probability `p` (0..1). */
+export function chance(rng, p) {
+  return rng() < p;
+}
+
+/** One entry of `entries`, each `{ item, weight }`, by relative weight. */
+export function weighted(rng, entries) {
+  let total = 0;
+  for (const entry of entries) total += entry.weight;
+  let roll = rng() * total;
+  for (const entry of entries) {
+    roll -= entry.weight;
+    if (roll <= 0) return entry.item;
+  }
+  return entries[entries.length - 1].item;
+}
+
+/** Roughly normal value around `mean` with spread `spread` (Box-Muller). */
+export function gauss(rng, mean = 0, spread = 1) {
+  const u = Math.max(rng(), 1e-9);
+  const v = rng();
+  return mean + spread * Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+}
+
+/** A stable seed from a word, so ?seed=solmar is the same city every time. */
+export function seedFromString(text) {
+  let hash = 2166136261;
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
+    hash = Math.imul(hash, 16777619);
+  }
+  return hash >>> 0;
+}
+
 /** Fisher-Yates shuffle, in place, on a copy. */
 export function shuffled(rng, items) {
   const copy = items.slice();

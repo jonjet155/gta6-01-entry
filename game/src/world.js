@@ -1,10 +1,11 @@
 // SOLMAR HEAT — the world: the player on foot or in a car, traffic, pedestrians,
 // police, the wanted level and the three-mission story. One fixed step at a time.
 import {
-  CAR_COLORS, CAR_LENGTH, CAR_WIDTH, MISSIONS, PED_COLORS, PED_SPEED_MAX, PED_SPEED_MIN,
-  PLAYER_CAR_ACCEL, PLAYER_CAR_BRAKE, PLAYER_CAR_MAX, PLAYER_CAR_REVERSE_MAX,
-  PLAYER_WALK_SPEED, POLICE_SPEED, ROAD_AXES_H, ROAD_AXES_V, ROAD_WIDTH,
-  TRAFFIC_SPEED_MAX, TRAFFIC_SPEED_MIN, WANTED_DECAY_SECONDS, WANTED_MAX, WORLD,
+  CAR_COLORS, CAR_HP_MAX, CAR_LENGTH, CAR_SMOKE_DAMAGE, CAR_WIDTH, DISTRICTS, HONK_FLEE_SECONDS,
+  MISSIONS, PED_COLORS, PED_COUNT, PED_SPEED_MAX, PED_SPEED_MIN, PLAYER_CAR_ACCEL, PLAYER_CAR_BRAKE,
+  PLAYER_CAR_MAX, PLAYER_CAR_REVERSE_MAX, PLAYER_WALK_SPEED, POLICE_SPAWN_DISTANCE, POLICE_SPEED,
+  ROAD_AXES_H, ROAD_AXES_V, ROAD_WIDTH, TRAFFIC_COUNT, TRAFFIC_SPEED_MAX, TRAFFIC_SPEED_MIN,
+  WANTED_DECAY_SECONDS, WANTED_MAX, WANTED_SIGHT_RANGE, WORLD,
 } from './config.js';
 import { generateCity, hitsBuilding, inWater } from './city.js';
 import { int, pick, range } from './random.js';
@@ -16,9 +17,8 @@ export const EVENT_BUSTED = 4;
 export const EVENT_COMPLETE = 8;
 export const EVENT_CRIME = 16;
 export const EVENT_THUD = 32;
+export const EVENT_HONK = 64;
 
-const TRAFFIC_COUNT = 14;
-const PED_COUNT = 24;
 const LANE = 22;
 const SIDEWALK = ROAD_WIDTH / 2 + 12;
 
@@ -58,6 +58,13 @@ export function createWorld(rng, seed) {
     busted: false,
     completed: false,
     lastThud: 0,
+    // Car condition: 0 is showroom-fresh, CAR_HP_MAX is a smoking wreck.
+    damage: 0,
+    // Short-lived crash puffs and exhaust smoke, drawn by the renderer.
+    particles: [],
+    smokeTimer: 0,
+    honkTimer: 0,
+    district: 'CORAL ROW',
   };
 
   function say(text, seconds = 3) {
@@ -111,11 +118,33 @@ export function createWorld(rng, seed) {
   }
 
   function spawnPolice() {
-    const road = nearestRoadPoint(state.player.x, state.player.y, 420);
+    const road = nearestRoadPoint(state.player.x, state.player.y, POLICE_SPAWN_DISTANCE);
     return {
       kind: 'police', x: road.x, y: road.y, angle: 0, speed: 0,
       color: '#1d2a44', siren: rng() * Math.PI * 2,
     };
+  }
+
+  /** A burst of smoke/spark puffs at (x, y) — crashes, rams and exhaust. */
+  function burst(x, y, count, speed = 60) {
+    for (let i = 0; i < count; i += 1) {
+      const angle = rng() * Math.PI * 2;
+      const v = range(rng, speed * 0.4, speed);
+      state.particles.push({
+        x, y,
+        vx: Math.cos(angle) * v, vy: Math.sin(angle) * v - 20,
+        life: range(rng, 0.4, 0.9), maxLife: 0.9,
+      });
+    }
+    if (state.particles.length > 120) state.particles.splice(0, state.particles.length - 120);
+  }
+
+  /** The named neighbourhood the player is standing in. */
+  function districtAt(x, y) {
+    for (const d of DISTRICTS) {
+      if (x >= d.x && x < d.x + d.w && y >= d.y && y < d.y + d.h) return d.name;
+    }
+    return 'SOLMAR';
   }
 
   // A point on a road roughly `away` from (x, y), for police to appear on.
@@ -164,6 +193,11 @@ export function createWorld(rng, seed) {
     state.busted = false;
     state.completed = false;
     state.lastThud = 0;
+    state.damage = 0;
+    state.particles = [];
+    state.smokeTimer = 0;
+    state.honkTimer = 0;
+    state.district = 'CORAL ROW';
   }
 
   function updateTraffic(dt) {
@@ -201,16 +235,21 @@ export function createWorld(rng, seed) {
 
   function updatePeds(dt) {
     const player = state.player;
+    let events = EVENT_NONE;
     for (const ped of state.peds) {
       if (ped.downTimer > 0) {
         ped.downTimer -= dt;
         if (ped.downTimer <= 0) ped.down = 0;
         continue;
       }
-      // Flee a speeding car nearby.
+      // Flee a speeding car nearby — or a horn blast, which clears the road
+      // ahead for a second and is the polite way to move a crowd.
       let fleeX = 0;
       let fleeY = 0;
       if (!player.onFoot && player.speed > 80 && dist(ped.x, ped.y, player.x, player.y) < 110) {
+        fleeX = ped.x - player.x;
+        fleeY = ped.y - player.y;
+      } else if (state.honkTimer > 0 && dist(ped.x, ped.y, player.x, player.y) < 160) {
         fleeX = ped.x - player.x;
         fleeY = ped.y - player.y;
       }
@@ -219,6 +258,9 @@ export function createWorld(rng, seed) {
         const len = Math.hypot(fleeX, fleeY) || 1;
         ped.x += (fleeX / len) * ped.speed * 2.4 * dt;
         ped.y += (fleeY / len) * ped.speed * 2.4 * dt;
+        // Keep `along` in step with the flee, or the pedestrian snaps back to
+        // where it was when it stops running.
+        ped.along = ped.vertical ? ped.y : ped.x;
       } else {
         ped.along += ped.dir * ped.speed * dt;
         if (ped.along < 100) { ped.along = 100; ped.dir = 1; }
@@ -238,17 +280,19 @@ export function createWorld(rng, seed) {
           }
         }
       }
-      // Run over by the player's car.
+      // Run over by the player's car. (Accumulate: an earlier version returned
+      // here and skipped every pedestrian after the first one that frame.)
       if (!player.onFoot && Math.abs(player.speed) > 60 && dist(ped.x, ped.y, player.x, player.y) < 30) {
         ped.down = 1;
         ped.downTimer = 3;
         state.lastThud = state.time;
-        addWanted(1);
+        burst(ped.x, ped.y, 6, 50);
+        events |= addWanted(1);
         say('Pedestrian hit! The cops saw that.');
-        return EVENT_CRIME | EVENT_THUD;
+        events |= EVENT_CRIME | EVENT_THUD;
       }
     }
-    return EVENT_NONE;
+    return events;
   }
 
   function updatePolice(dt) {
@@ -284,6 +328,8 @@ export function createWorld(rng, seed) {
           cop.speed *= 0.4;
           cop.lastRam = state.time;
           state.lastThud = state.time;
+          state.damage = Math.min(CAR_HP_MAX, state.damage + 15);
+          burst(player.x, player.y, 8, 70);
           return EVENT_THUD;
         }
       }
@@ -372,6 +418,9 @@ export function createWorld(rng, seed) {
     }
     if (state.missionIndex === 0) state.hasPackage = true;
     state.cash += mission.reward;
+    // The crew patches the car up between jobs — a finished mission is worth
+    // more than the cash when the car is already smoking.
+    state.damage = Math.max(0, state.damage - 30);
     state.missionIndex += 1;
     if (state.missionIndex >= MISSIONS.length) {
       state.completed = true;
@@ -386,6 +435,14 @@ export function createWorld(rng, seed) {
   function step(dt, input, attract) {
     state.time += dt;
     if (state.messageTimer > 0) state.messageTimer -= dt;
+    if (state.honkTimer > 0) state.honkTimer -= dt;
+    // Age the crash puffs and exhaust smoke, and drop the dead ones.
+    for (const p of state.particles) {
+      p.life -= dt;
+      p.x += p.vx * dt;
+      p.y += p.vy * dt;
+    }
+    if (state.particles.length > 0) state.particles = state.particles.filter((p) => p.life > 0);
     updateTraffic(dt);
     let events = updatePeds(dt);
     if (attract) return events;
@@ -412,7 +469,14 @@ export function createWorld(rng, seed) {
       if (input.punch) events |= tryPunch();
     } else {
       const car = player.car;
-      if (input.up) player.speed = Math.min(PLAYER_CAR_MAX, player.speed + PLAYER_CAR_ACCEL * dt);
+      // A horn blast: pedestrians scatter, traffic hears it too.
+      if (input.honk) {
+        state.honkTimer = HONK_FLEE_SECONDS;
+        events |= EVENT_HONK;
+      }
+      // A wrecked car loses top speed: every 10 damage costs about 4% of it.
+      const topSpeed = PLAYER_CAR_MAX * (1 - (state.damage / CAR_HP_MAX) * 0.4);
+      if (input.up) player.speed = Math.min(topSpeed, player.speed + PLAYER_CAR_ACCEL * dt);
       else if (input.down) {
         player.speed = player.speed > 20
           ? Math.max(0, player.speed - PLAYER_CAR_BRAKE * dt)
@@ -427,6 +491,13 @@ export function createWorld(rng, seed) {
       if (hitsBuilding(city, nx, ny, 16)) {
         player.speed *= 0.35;
         state.lastThud = state.time;
+        // Damage is once per scrape, not once per frame: without the gate a
+        // single wall slide would wreck the car in a tenth of a second.
+        if (state.time - (state.lastBuildingHit || 0) > 0.5) {
+          state.damage = Math.min(CAR_HP_MAX, state.damage + 10);
+          state.lastBuildingHit = state.time;
+          burst(nx, ny, 6, 60);
+        }
         events |= EVENT_THUD;
       } else {
         player.x = nx;
@@ -445,12 +516,22 @@ export function createWorld(rng, seed) {
               player.speed *= 0.85;
               other.lastBump = state.time;
               state.lastThud = state.time;
+              state.damage = Math.min(CAR_HP_MAX, state.damage + 5);
+              burst(player.x, player.y, 5, 50);
               events |= EVENT_THUD;
             }
           }
         }
       }
       if (car) { car.x = player.x; car.y = player.y; car.angle = player.angle; car.speed = player.speed; }
+      // A smoking car puffs from its tail as it drives.
+      if (state.damage >= CAR_SMOKE_DAMAGE && Math.abs(player.speed) > 30) {
+        state.smokeTimer -= dt;
+        if (state.smokeTimer <= 0) {
+          burst(player.x - Math.cos(player.angle) * 20, player.y - Math.sin(player.angle) * 20, 1, 25);
+          state.smokeTimer = 0.12;
+        }
+      }
       if (input.enter) events |= tryEnterCar();
     }
 
@@ -459,7 +540,7 @@ export function createWorld(rng, seed) {
 
     // Wanted level cools off when the player stays clean and out of sight.
     if (state.wanted > 0) {
-      const copNear = state.police.some((cop) => dist(cop.x, cop.y, player.x, player.y) < 260);
+      const copNear = state.police.some((cop) => dist(cop.x, cop.y, player.x, player.y) < WANTED_SIGHT_RANGE);
       if (!copNear) {
         state.quietTime += dt;
         if (state.quietTime >= WANTED_DECAY_SECONDS) {
@@ -476,6 +557,8 @@ export function createWorld(rng, seed) {
     const mission = currentMission();
     state.nearTarget = !!mission && dist(player.x, player.y, mission.target.x, mission.target.y) < 80;
     if (input.enter && state.nearTarget) events |= tryMissionAction();
+    // The HUD's district line follows the player across the map.
+    state.district = districtAt(player.x, player.y);
 
     return events;
   }

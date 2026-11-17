@@ -46,11 +46,13 @@ export function generateCity(rng) {
   const half = ROAD_WIDTH / 2;
   const pad = 14;
 
-  // One park block, one parking-lot block, the rest built up.
+  // One park block, one parking-lot block, one plaza block, the rest built up.
   const parkCol = 1;
   const parkRow = 2;
   const lotCol = 5;
   const lotRow = 0;
+  const plazaCol = 6;
+  const plazaRow = 2;
 
   for (let col = 0; col < ROAD_AXES_V.length - 1; col += 1) {
     for (let row = 0; row < ROAD_AXES_H.length - 1; row += 1) {
@@ -72,6 +74,14 @@ export function generateCity(rng) {
             angle: Math.PI / 2,
             color: pick(rng, CAR_COLORS),
           });
+        }
+        continue;
+      }
+      // Palm Court plaza: open stone, a fountain in the middle, trees at the
+      // corners — the only block with nowhere to hide a car.
+      if (col === plazaCol && row === plazaRow) {
+        for (let i = 0; i < 10; i += 1) {
+          trees.push({ x: range(rng, x0 + 10, x1 - 10), y: range(rng, y0 + 10, y1 - 10), r: range(rng, 8, 13) });
         }
         continue;
       }
@@ -120,10 +130,39 @@ export function generateCity(rng) {
   ];
   for (const spot of curbSpots) parked.push({ ...spot, color: pick(rng, CAR_COLORS) });
 
+  // Crates stacked along the pier, street lamps on the avenue corners, and the
+  // named places the renderer labels on the map.
+  const crates = [];
+  for (let i = 0; i < 12; i += 1) {
+    crates.push({
+      x: 620 + (i % 6) * 210 + range(rng, -20, 20),
+      y: DOCKS_Y - 42 + Math.floor(i / 6) * 26,
+      s: range(rng, 16, 24),
+    });
+  }
+  const lamps = [];
+  for (const axis of ROAD_AXES_V) {
+    for (const cross of ROAD_AXES_H) {
+      if (cross >= WATER_Y) continue;
+      lamps.push({ x: axis + ROAD_WIDTH / 2 + 6, y: cross - ROAD_WIDTH / 2 - 6 });
+    }
+  }
+  const landmarks = [
+    { name: 'NEON PALMS', x: 1150, y: 420 },
+    { name: 'DOCKS', x: 1280, y: 1600 },
+    { name: 'SAFEHOUSE', x: 240, y: 240 },
+    { name: 'PALM COURT', x: 2080, y: 800 },
+    { name: 'THE PARK', x: 640, y: 1120 },
+  ];
+
   return {
     buildings,
     trees,
     parked,
+    crates,
+    lamps,
+    landmarks,
+    plaza: { x: ROAD_AXES_V[plazaCol] + half + pad, y: ROAD_AXES_H[plazaRow] + half + pad, w: 320 - ROAD_WIDTH - pad * 2, h: 320 - ROAD_WIDTH - pad * 2 },
     park: { x: ROAD_AXES_V[parkCol] + half + pad, y: ROAD_AXES_H[parkRow] + half + pad, w: 320 - ROAD_WIDTH - pad * 2, h: 320 - ROAD_WIDTH - pad * 2 },
     hotel,
     playerSpawn: { x: 480, y: 560 },

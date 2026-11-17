@@ -12,6 +12,8 @@ const args = process.argv.slice(2);
 const portIndex = args.indexOf('--port');
 const requested = portIndex === -1 ? 8080 : Number(args[portIndex + 1]);
 const port = Number.isInteger(requested) && requested > 0 && requested < 65536 ? requested : 8080;
+const hostIndex = args.indexOf('--host');
+const host = hostIndex === -1 ? '127.0.0.1' : args[hostIndex + 1] || '127.0.0.1';
 
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -34,18 +36,21 @@ const MIME: Record<string, string> = {
 };
 
 createServer((request, response) => {
+  const started = Date.now();
   const url = new URL(request.url ?? '/', 'http://localhost');
   let pathname: string;
   try {
     pathname = decodeURIComponent(url.pathname);
   } catch {
     response.writeHead(400).end('bad request');
+    console.log(`${request.method} ${url.pathname} -> 400 (${Date.now() - started}ms)`);
     return;
   }
   if (pathname.endsWith('/')) pathname += 'index.html';
   const file = resolve(join(root, normalize(pathname)));
   if (file !== root && !file.startsWith(root + sep)) {
     response.writeHead(403).end('forbidden');
+    console.log(`${request.method} ${url.pathname} -> 403 (${Date.now() - started}ms)`);
     return;
   }
   let size: number;
@@ -55,6 +60,18 @@ createServer((request, response) => {
     size = stats.size;
   } catch {
     response.writeHead(404).end('not found');
+    console.log(`${request.method} ${url.pathname} -> 404 (${Date.now() - started}ms)`);
+    return;
+  }
+  // HEAD answers with headers only, so link checkers and the screenshot
+  // harness can probe a file without downloading it.
+  if (request.method === 'HEAD') {
+    response.writeHead(200, {
+      'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
+      'content-length': size,
+      'cache-control': 'no-store',
+    }).end();
+    console.log(`HEAD ${url.pathname} -> 200 (${Date.now() - started}ms)`);
     return;
   }
   response.writeHead(200, {
@@ -63,6 +80,14 @@ createServer((request, response) => {
     'cache-control': 'no-store',
   });
   createReadStream(file).pipe(response);
-}).listen(port, '127.0.0.1', () => {
-  console.log(`game/ is on http://localhost:${port}`);
+  response.on('finish', () => console.log(`${request.method} ${url.pathname} -> 200 (${Date.now() - started}ms)`));
+}).listen(port, host, () => {
+  console.log(`game/ is on http://${host}:${port}`);
+}).on('error', (error) => {
+  if ((error as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+    console.error(`error: ${host}:${port} is already in use — stop the other server or pass --port <free port>`);
+  } else {
+    console.error(`error: failed to listen on ${host}:${port}: ${error.message}`);
+  }
+  process.exitCode = 1;
 });

@@ -8,6 +8,7 @@ export function createAudio() {
   let sirenGain = null;
   let sirenLfo = null;
   let started = false;
+  let muted = false;
 
   function ensure() {
     if (ctx) return true;
@@ -60,7 +61,7 @@ export function createAudio() {
   }
 
   function blip(frequency, duration, type = 'sine', volume = 0.12) {
-    if (!ensure() || ctx.state !== 'running') return;
+    if (muted || !ensure() || ctx.state !== 'running') return;
     try {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -79,12 +80,35 @@ export function createAudio() {
 
   return {
     start,
+    /** Mute or unmute everything; the engine and siren obey it on the next update. */
+    setMuted(value) {
+      muted = !!value;
+      if (muted && ctx) {
+        try {
+          engineGain.gain.value = 0;
+          sirenGain.gain.value = 0;
+        } catch { /* Sound is garnish: never let it break the game. */ }
+      }
+    },
+    isMuted() { return muted; },
     pickup() { blip(660, 0.18, 'sine', 0.14); setTimeout(() => blip(990, 0.22, 'sine', 0.14), 110); },
     thud() { blip(70, 0.16, 'square', 0.2); },
     crime() { blip(220, 0.3, 'square', 0.1); setTimeout(() => blip(180, 0.3, 'square', 0.1), 140); },
+    /** A two-note car horn. */
+    horn() { blip(370, 0.22, 'square', 0.12); setTimeout(() => blip(466, 0.22, 'square', 0.12), 90); },
+    /** A little rising arpeggio when a mission pays out. */
+    mission() {
+      blip(523, 0.14, 'triangle', 0.14);
+      setTimeout(() => blip(659, 0.14, 'triangle', 0.14), 100);
+      setTimeout(() => blip(784, 0.22, 'triangle', 0.16), 200);
+    },
+    /** A low falling sting when the cops take Dario in. */
+    busted() { blip(330, 0.3, 'sawtooth', 0.12); setTimeout(() => blip(165, 0.5, 'sawtooth', 0.12), 220); },
+    /** A soft UI click for menu confirms. */
+    click() { blip(880, 0.06, 'sine', 0.08); },
     /** speed01: 0..1 while driving, 0 on foot. wanted: current wanted level. */
     update(speed01, wanted) {
-      if (!ctx || ctx.state !== 'running') return;
+      if (!ctx || ctx.state !== 'running' || muted) return;
       try {
         engineGain.gain.value = speed01 > 0.02 ? 0.03 + speed01 * 0.05 : 0;
         engineOsc.frequency.value = 50 + speed01 * 130;

@@ -1,7 +1,6 @@
 // SOLMAR HEAT — the renderer: one canvas, top-down. The city, the cars, the people,
 // the HUD with its minimap, and the title / pause / busted / finished screens.
-import { CAR_LENGTH, CAR_WIDTH, MISSIONS, PALETTE, ROAD_AXES_H, ROAD_AXES_V, ROAD_WIDTH, WATER_Y, WORLD } from './config.js';
-import { isOnRoad } from './city.js';
+import { CAR_LENGTH, CAR_SMOKE_DAMAGE, CAR_WIDTH, MISSIONS, PALETTE, ROAD_AXES_H, ROAD_AXES_V, ROAD_WIDTH, SPEED_KMH, WATER_Y, WORLD } from './config.js';
 
 export const SCREEN_TITLE = 'title';
 export const SCREEN_PLAY = 'play';
@@ -67,6 +66,53 @@ export function createRenderer(canvas) {
     // Park.
     ctx.fillStyle = PALETTE.park;
     ctx.fillRect(city.park.x, city.park.y, city.park.w, city.park.h);
+
+    // Palm Court plaza: open stone with a fountain in the middle.
+    ctx.fillStyle = PALETTE.plaza;
+    ctx.fillRect(city.plaza.x, city.plaza.y, city.plaza.w, city.plaza.h);
+    ctx.fillStyle = PALETTE.plazaDark;
+    ctx.fillRect(city.plaza.x, city.plaza.y, city.plaza.w, 6);
+    ctx.fillRect(city.plaza.x, city.plaza.y, 6, city.plaza.h);
+    ctx.fillStyle = PALETTE.fountain;
+    ctx.beginPath();
+    ctx.arc(city.plaza.x + city.plaza.w / 2, city.plaza.y + city.plaza.h / 2, 22, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.5)';
+    ctx.beginPath();
+    ctx.arc(city.plaza.x + city.plaza.w / 2, city.plaza.y + city.plaza.h / 2, 12, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Crates stacked along the pier.
+    for (const crate of city.crates) {
+      ctx.fillStyle = PALETTE.crateDark;
+      ctx.fillRect(crate.x + 2, crate.y + 2, crate.s, crate.s);
+      ctx.fillStyle = PALETTE.crate;
+      ctx.fillRect(crate.x, crate.y, crate.s, crate.s);
+      ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+      ctx.lineWidth = 1;
+      ctx.strokeRect(crate.x + 1, crate.y + 1, crate.s - 2, crate.s - 2);
+    }
+
+    // Street lamps on the avenue corners, with a warm glow.
+    for (const lamp of city.lamps) {
+      ctx.fillStyle = 'rgba(255,217,138,0.18)';
+      ctx.beginPath();
+      ctx.arc(lamp.x, lamp.y, 14, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = PALETTE.lamp;
+      ctx.beginPath();
+      ctx.arc(lamp.x, lamp.y, 3, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Named places, lettered on the map so the city reads at a glance.
+    ctx.font = `bold 11px ${BODY_FONT}`;
+    ctx.textAlign = 'center';
+    for (const mark of city.landmarks) {
+      ctx.fillStyle = 'rgba(255,255,255,0.85)';
+      ctx.fillText(mark.name, mark.x, mark.y);
+    }
+    ctx.textAlign = 'left';
 
     // Roads: asphalt, then sidewalks at the edges, then lane dashes. The avenues
     // end at the harbour water — they do not keep going into the sea.
@@ -159,12 +205,32 @@ export function createRenderer(canvas) {
       ctx.fillText('PD', 0, 3);
     }
     if (isPlayer) {
+      // Headlight cones: two warm wedges ahead of the car, for the long night.
+      ctx.fillStyle = PALETTE.headlight;
+      ctx.beginPath();
+      ctx.moveTo(CAR_LENGTH / 2, -8);
+      ctx.lineTo(CAR_LENGTH / 2 + 110, -34);
+      ctx.lineTo(CAR_LENGTH / 2 + 110, 34);
+      ctx.lineTo(CAR_LENGTH / 2, 8);
+      ctx.closePath();
+      ctx.fill();
       ctx.strokeStyle = '#ffffff';
       ctx.lineWidth = 2;
       roundRect(ctx, -CAR_LENGTH / 2 - 2, -CAR_WIDTH / 2 - 2, CAR_LENGTH + 4, CAR_WIDTH + 4, 9);
       ctx.stroke();
     }
     ctx.restore();
+  }
+
+  /** Crash puffs and exhaust smoke, fading as their life runs out. */
+  function drawParticles(state) {
+    for (const p of state.particles) {
+      const alpha = Math.max(0, p.life / p.maxLife) * 0.55;
+      ctx.fillStyle = `rgba(90,90,90,${alpha.toFixed(2)})`;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 4 + (1 - p.life / p.maxLife) * 7, 0, Math.PI * 2);
+      ctx.fill();
+    }
   }
 
   function drawPed(ped) {
@@ -316,9 +382,10 @@ export function createRenderer(canvas) {
     }
     const mission = MISSIONS[state.missionIndex];
     if (mission && !state.completed) {
+      const pulse = 4 + Math.sin(state.time * 4) * 1.5;
       ctx.fillStyle = '#ffd23e';
       ctx.beginPath();
-      ctx.arc(mx + mission.target.x * sx, my + mission.target.y * sy, 4, 0, Math.PI * 2);
+      ctx.arc(mx + mission.target.x * sx, my + mission.target.y * sy, pulse, 0, Math.PI * 2);
       ctx.fill();
     }
     for (const cop of state.police) {
@@ -340,7 +407,7 @@ export function createRenderer(canvas) {
     ctx.fillStyle = '#ffffff';
     ctx.font = `bold 11px ${BODY_FONT}`;
     ctx.textAlign = 'left';
-    ctx.fillText('SOLMAR', mx, my + mh + 20);
+    ctx.fillText(`SOLMAR · ${state.district}`, mx, my + mh + 20);
   }
 
   function drawHud(state, screen, cam) {
@@ -373,10 +440,10 @@ export function createRenderer(canvas) {
       ctx.fillText('Press E', 24, 100 + 34);
     }
 
-    // Speed, bottom right, while driving.
+    // Speed, bottom right, while driving — plus the car's condition.
     const p = state.player;
     if (!p.onFoot) {
-      const kmh = Math.round(Math.abs(p.speed) * 0.55);
+      const kmh = Math.round(Math.abs(p.speed) * SPEED_KMH);
       ctx.fillStyle = 'rgba(12,16,24,0.72)';
       roundRect(ctx, viewW - 150, viewH - 64, 136, 50, 8);
       ctx.fill();
@@ -388,12 +455,21 @@ export function createRenderer(canvas) {
       ctx.fillStyle = '#c8ccd4';
       ctx.fillText('km/h', viewW - 24, viewH - 28);
       ctx.textAlign = 'left';
+      if (state.damage > 0) {
+        const w = 136;
+        ctx.fillStyle = 'rgba(12,16,24,0.72)';
+        roundRect(ctx, viewW - 150, viewH - 78, w, 10, 5);
+        ctx.fill();
+        ctx.fillStyle = state.damage >= CAR_SMOKE_DAMAGE ? '#ff5f5f' : '#ffd23e';
+        roundRect(ctx, viewW - 148, viewH - 76, (w - 4) * (1 - state.damage / 100), 6, 3);
+        ctx.fill();
+      }
     }
 
     // Controls hint, bottom left.
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
     ctx.font = `12px ${BODY_FONT}`;
-    ctx.fillText(p.onFoot ? 'WASD walk · E enter car · F shove · P pause' : 'WASD drive · E get out · P pause', 16, viewH - 16);
+    ctx.fillText(p.onFoot ? 'WASD walk · E enter car · F shove · P pause · M mute' : 'WASD drive · E get out · H horn · P pause · M mute', 16, viewH - 16);
 
     // Toast message, top centre.
     if (state.message && state.messageTimer > 0) {
@@ -508,6 +584,7 @@ export function createRenderer(canvas) {
     const playerCar = state.player.car;
     if (playerCar) drawCar(playerCar, true);
     drawPlayer(state);
+    drawParticles(state);
     ctx.restore();
 
     if (screen === SCREEN_TITLE) {

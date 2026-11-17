@@ -6,8 +6,8 @@
 // instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
 import { SAVE_KEY, STEP } from './config.js';
 import { createRandom } from './random.js';
-import { createWorld, EVENT_BUSTED, EVENT_COMPLETE, EVENT_CRIME, EVENT_THUD } from './world.js';
-import { ACTION_CONFIRM, ACTION_PAUSE, createInput } from './input.js';
+import { createWorld, EVENT_BUSTED, EVENT_COMPLETE, EVENT_CRIME, EVENT_HONK, EVENT_PICKUP, EVENT_DELIVERED, EVENT_THUD } from './world.js';
+import { ACTION_CONFIRM, ACTION_MUTE, ACTION_PAUSE, createInput } from './input.js';
 import { createAudio } from './audio.js';
 import { createRenderer, SCREEN_BUSTED, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE, SCREEN_WIN } from './render.js';
 import { stageShot } from './shots.js';
@@ -100,8 +100,13 @@ function runGame() {
 
   function handleActions() {
     const actions = input.takeActions();
+    if (actions & ACTION_MUTE) {
+      audio.setMuted(!audio.isMuted());
+      announce(audio.isMuted() ? 'Sound off.' : 'Sound on.');
+    }
     if (actions & ACTION_CONFIRM) {
       audio.start();
+      audio.click();
       if (screen === SCREEN_TITLE) startGame();
       else if (screen === SCREEN_BUSTED) { world.reset(); world.state.cash = save?.cash ?? 0; screen = SCREEN_PLAY; announce('Playing.'); }
       else if (screen === SCREEN_WIN) { world.reset(); save = null; screen = SCREEN_PLAY; announce('Playing. A new night in Solmar.'); }
@@ -128,7 +133,9 @@ function runGame() {
         accumulator -= STEP;
         if (events & EVENT_THUD) audio.thud();
         if (events & EVENT_CRIME) audio.crime();
-        if (events & EVENT_BUSTED) { endBusted(); break; }
+        if (events & EVENT_HONK) audio.horn();
+        if (events & (EVENT_PICKUP | EVENT_DELIVERED)) audio.mission();
+        if (events & EVENT_BUSTED) { audio.busted(); endBusted(); break; }
         if (events & EVENT_COMPLETE) { endWin(); break; }
       }
       const player = world.state.player;
@@ -142,6 +149,14 @@ function runGame() {
   // Leaving the tab pauses a running game rather than letting the cops close in unseen.
   document.addEventListener('visibilitychange', () => {
     if (document.hidden && screen === SCREEN_PLAY) {
+      screen = SCREEN_PAUSED;
+      announce('Paused.');
+    }
+  });
+
+  // Losing the window does the same: a hidden game never runs while unwatched.
+  window.addEventListener('blur', () => {
+    if (screen === SCREEN_PLAY) {
       screen = SCREEN_PAUSED;
       announce('Paused.');
     }

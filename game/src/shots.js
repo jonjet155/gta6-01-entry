@@ -8,6 +8,7 @@ import { SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 const START_SECONDS = 6;
 const DRIVE_SECONDS = 5.5;
 const FOOT_SECONDS = 5;
+const GETAWAY_SECONDS = 7;
 
 /** Steer toward a point, holding the gas — the car turns as it goes. */
 function steerToward(player, tx, ty) {
@@ -85,14 +86,45 @@ function footAutopilot(world) {
 }
 
 /**
- * Set `world` to the named scene (start, drive or foot; any other name is start) and
- * return the screen to draw over it.
+ * Set `world` to the named scene (start, drive, foot or getaway; any other name
+ * is start) and return the screen to draw over it.
  */
 export function stageShot(name, world) {
   world.reset();
-  if (name !== 'drive' && name !== 'foot') {
+  if (name !== 'drive' && name !== 'foot' && name !== 'getaway') {
     for (let i = 0; i < START_SECONDS / STEP; i += 1) world.step(STEP, {}, true);
     return { screen: SCREEN_TITLE };
+  }
+  if (name === 'getaway') {
+    // The third job: three stars, three patrol cars, Dario racing west along
+    // the Neon Palms strip toward the safehouse — the chase at its hottest.
+    const state = world.state;
+    const car = { kind: 'player', x: 1440, y: 1300, angle: -Math.PI / 2, speed: 280, color: '#d94f3d' };
+    state.cars.push(car);
+    state.player.car = car;
+    state.player.onFoot = false;
+    state.player.x = car.x;
+    state.player.y = car.y;
+    state.player.angle = car.angle;
+    state.player.speed = 280;
+    state.missionIndex = 2;
+    state.wanted = 3;
+    state.damage = 55;
+    state.police.push(
+      { kind: 'police', x: 1440, y: 1560, angle: -Math.PI / 2, speed: 220, color: '#1d2a44', siren: 0 },
+      { kind: 'police', x: 1440, y: 1640, angle: -Math.PI / 2, speed: 200, color: '#1d2a44', siren: 2 },
+      { kind: 'police', x: 1440, y: 1720, angle: -Math.PI / 2, speed: 190, color: '#1d2a44', siren: 4 },
+    );
+    world._driveWaypoints = [
+      { x: 1440, y: 480, slow: true },
+      { x: 480, y: 480 },
+    ];
+    let events = 0;
+    for (let i = 0; i < GETAWAY_SECONDS / STEP; i += 1) {
+      events = world.step(STEP, driveAutopilot(world), false);
+      if (events & (EVENT_BUSTED | EVENT_COMPLETE)) break;
+    }
+    return { screen: SCREEN_PLAY };
   }
   if (name === 'drive') {
     // Dario in a car heading north up Coral Row toward the Neon Palms job, wanted
