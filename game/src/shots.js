@@ -1,0 +1,131 @@
+// The screenshot scenes behind ?shot=start|drive|foot. Each one plays the real rules
+// forward from a fresh world for a fixed number of steps, so the frame is what a short
+// game really looks like — and the same seed always gives the same frame.
+import { STEP } from './config.js';
+import { EVENT_BUSTED, EVENT_COMPLETE } from './world.js';
+import { SCREEN_PLAY, SCREEN_TITLE } from './render.js';
+
+const START_SECONDS = 6;
+const DRIVE_SECONDS = 5.5;
+const FOOT_SECONDS = 5;
+
+/** Steer toward a point, holding the gas — the car turns as it goes. */
+function steerToward(player, tx, ty) {
+  // Never brake into reverse: if the car is already rolling backwards, just drive
+  // forward again instead of steering against it.
+  if (player.speed < 0) return { up: true, down: false, left: false, right: false, enter: false, punch: false };
+  const want = Math.atan2(ty - player.y, tx - player.x);
+  let diff = want - player.angle;
+  while (diff > Math.PI) diff -= Math.PI * 2;
+  while (diff < -Math.PI) diff += Math.PI * 2;
+  // The car's angle decreases on a left turn (screen y points down), so a positive
+  // diff — the target sits clockwise from the nose — means steer right. Brake into a
+  // sharp turn, but only while there is speed to shed — below 40 the brake would
+  // put the car in reverse.
+  const braking = Math.abs(diff) > 0.6 && player.speed > 40;
+  return {
+    up: !braking,
+    down: braking,
+    left: diff < -0.12,
+    right: diff > 0.12,
+    enter: false,
+    punch: false,
+  };
+}
+
+/**
+ * Drive the road grid to the mission marker: waypoints run along avenues and streets
+ * (never through a block), so the car stays on the road and the frame shows a chase,
+ * not a crash into a building.
+ */
+function driveAutopilot(world) {
+  const player = world.state.player;
+  const mission = world.currentMission();
+  if (!mission) return { up: true, down: false, left: false, right: false, enter: false, punch: false };
+  if (!world._driveWaypoints) {
+    world._driveWaypoints = [
+      { x: player.x, y: 480, slow: true },
+      { x: 1120, y: 480 },
+    ];
+  }
+  const waypoints = world._driveWaypoints;
+  while (waypoints.length > 0 && Math.hypot(waypoints[0].x - player.x, waypoints[0].y - player.y) < 60) waypoints.shift();
+  const target = waypoints.length > 0 ? waypoints[0] : mission.target;
+  // Slow down for a turn waypoint: at full speed the turning circle is wider than
+  // the road, and the car ends up in the building on the corner. Inside the zone the
+  // car never floors it again — it brakes above 150 and coasts below it.
+  const distToTarget = Math.hypot(target.x - player.x, target.y - player.y);
+  if (waypoints.length > 0 && waypoints[0].slow && distToTarget < 260) {
+    const input = steerToward(player, target.x, target.y);
+    input.up = false;
+    input.down = player.speed > 150;
+    return input;
+  }
+  return steerToward(player, target.x, target.y);
+}
+
+/** Walk toward the nearest parked car and stop beside it — on foot, as the scene says. */
+function footAutopilot(world) {
+  const player = world.state.player;
+  let best = null;
+  let bestD = Infinity;
+  for (const car of world.state.cars) {
+    if (car.kind !== 'parked') continue;
+    const d = Math.hypot(car.x - player.x, car.y - player.y);
+    if (d < bestD) { bestD = d; best = car; }
+  }
+  if (!best || bestD < 80) return { up: false, down: false, left: false, right: false, enter: false, punch: false };
+  const want = Math.atan2(best.y - player.y, best.x - player.x);
+  const dx = Math.cos(want);
+  const dy = Math.sin(want);
+  return {
+    up: dy < -0.3, down: dy > 0.3, left: dx < -0.3, right: dx > 0.3,
+    enter: false, punch: false,
+  };
+}
+
+/**
+ * Set `world` to the named scene (start, drive or foot; any other name is start) and
+ * return the screen to draw over it.
+ */
+export function stageShot(name, world) {
+  world.reset();
+  if (name !== 'drive' && name !== 'foot') {
+    for (let i = 0; i < START_SECONDS / STEP; i += 1) world.step(STEP, {}, true);
+    return { screen: SCREEN_TITLE };
+  }
+  if (name === 'drive') {
+    // Dario in a car heading north up Coral Row toward the Neon Palms job, wanted
+    // level 2, two patrol cars on his tail — the whole game in one frame.
+    const state = world.state;
+    const car = { kind: 'player', x: 480, y: 1300, angle: -Math.PI / 2, speed: 260, color: '#f2f2f2' };
+    state.cars.push(car);
+    state.player.car = car;
+    state.player.onFoot = false;
+    state.player.x = car.x;
+    state.player.y = car.y;
+    state.player.angle = car.angle;
+    state.player.speed = 260;
+    state.missionIndex = 1;
+    state.wanted = 2;
+    state.police.push(
+      { kind: 'police', x: 480, y: 1560, angle: -Math.PI / 2, speed: 200, color: '#1d2a44', siren: 0 },
+      { kind: 'police', x: 480, y: 1640, angle: -Math.PI / 2, speed: 180, color: '#1d2a44', siren: 2 },
+    );
+    let events = 0;
+    for (let i = 0; i < DRIVE_SECONDS / STEP; i += 1) {
+      events = world.step(STEP, driveAutopilot(world), false);
+      if (events & (EVENT_BUSTED | EVENT_COMPLETE)) break;
+    }
+    return { screen: SCREEN_PLAY };
+  }
+  // Foot: Dario on the sidewalk by the park, walking up to a parked car, pedestrians
+  // about, the hotel job on the HUD.
+  world.state.missionIndex = 1;
+  let events = 0;
+  for (let i = 0; i < FOOT_SECONDS / STEP; i += 1) {
+    events = world.step(STEP, footAutopilot(world), false);
+    if (events & (EVENT_BUSTED | EVENT_COMPLETE)) break;
+  }
+  return { screen: SCREEN_PLAY };
+}
