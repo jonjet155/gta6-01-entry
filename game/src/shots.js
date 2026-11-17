@@ -8,7 +8,7 @@ import { SCREEN_PLAY, SCREEN_TITLE } from './render.js';
 const START_SECONDS = 6;
 const DRIVE_SECONDS = 5.5;
 const FOOT_SECONDS = 5;
-const GETAWAY_SECONDS = 7;
+const GETAWAY_SECONDS = 2.5;
 
 /** Steer toward a point, holding the gas — the car turns as it goes. */
 function steerToward(player, tx, ty) {
@@ -96,8 +96,10 @@ export function stageShot(name, world) {
     return { screen: SCREEN_TITLE };
   }
   if (name === 'getaway') {
-    // The third job: three stars, three patrol cars, Dario racing west along
-    // the Neon Palms strip toward the safehouse — the chase at its hottest.
+    // The third job: three stars, three patrol cars, Dario racing north up
+    // Coral Row toward the safehouse — the chase at its hottest. The scene is
+    // short on purpose: the patrol cars are faster than Dario, and a longer
+    // run ends with him pinned against a wall at 0 km/h instead of racing.
     const state = world.state;
     const car = { kind: 'player', x: 1440, y: 1300, angle: -Math.PI / 2, speed: 280, color: '#d94f3d' };
     state.cars.push(car);
