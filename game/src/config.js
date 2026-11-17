@@ -35,12 +35,31 @@ export const POLICE_SPAWN_DISTANCE = 420;
 export const WANTED_SIGHT_RANGE = 260;
 // The speedometer's units: world speed (px/s) times this is km/h.
 export const SPEED_KMH = 0.55;
-// The player's car takes damage from crashes and police rams; at 100 it is a
-// wreck — slower, smoking, and one more hard hit away from being abandoned.
+// The car's condition, the night clock and the two late jobs (world.js reads these).
 export const CAR_HP_MAX = 100;
 export const CAR_SMOKE_DAMAGE = 50;
 // A horn blast makes nearby pedestrians run for this many seconds.
 export const HONK_FLEE_SECONDS = 1.2;
+// Traffic lights swap every TRAFFIC_LIGHT_CYCLE seconds: green one way, red
+// the other, so the cross traffic takes turns at every intersection.
+export const TRAFFIC_LIGHT_CYCLE = 8;
+// One full night — dusk (21:00) to dawn (05:00) — lasts this many real seconds.
+// The clock starts just after sunset and the city darkens toward midnight.
+export const CLOCK_DAY_SECONDS = 240;
+export const CLOCK_START = 0.06;
+// The vault takes this long to crack while Dario stays at the bank door; the
+// alarm adds this many wanted stars the moment the drill starts.
+export const VAULT_CRACK_SECONDS = 4;
+export const VAULT_ALARM_WANTED = 2;
+// The last run: the boat at the pier leaves after this many seconds. Too slow
+// and the crew gives Dario one more shot, from the top of the timer.
+export const LAST_RUN_SECONDS = 75;
+// The radio: three pirate stations, all WebAudio synth, switched with R.
+export const STATIONS = [
+  { name: 'SOLMAR FM 88.5', blurb: 'SUNSET SYNTH' },
+  { name: 'PALM 101.2', blurb: 'LO-FI NIGHTS' },
+  { name: 'TROPICANA 94.7', blurb: 'SALSA CALIENTE' },
+];
 
 // Named neighbourhoods, for the HUD's "you are here" line and the minimap.
 // Each rectangle is { x, y, w, h } in world units.
@@ -75,6 +94,20 @@ export const MISSIONS = [
     text: 'Lose the cops first — then reach the safehouse on Coral Row.',
     target: { x: 240, y: 240, label: 'SAFEHOUSE' },
     reward: 1000,
+  },
+  {
+    id: 'vault',
+    title: 'THE VAULT',
+    text: 'Crack the Solmar Bank vault. The alarm will bring every cop in town.',
+    target: { x: 1920, y: 800, label: 'SOLMAR BANK' },
+    reward: 1500,
+  },
+  {
+    id: 'lastrun',
+    title: 'THE LAST RUN',
+    text: 'The boat leaves the pier in 75 seconds. Get there — with the money.',
+    target: { x: 1280, y: 1620, label: 'THE PIER' },
+    reward: 2000,
   },
 ];
 
@@ -111,6 +144,15 @@ export const PALETTE = {
   foam: 'rgba(255,255,255,0.35)',
   lamp: '#ffd98a',
   smoke: 'rgba(90,90,90,0.45)',
+  // The night: a deep blue wash laid over the city after midnight, lit
+  // windows, the bank's gold, and the vault alarm's red.
+  night: '10,14,40',
+  windowLit: '#ffd98a',
+  bankGold: '#d9a441',
+  alarm: '#ff2d2d',
+  route: '#ffd23e',
+  lightGreen: '#37d67a',
+  lightRed: '#ff2d2d',
 };
 
 export const CAR_COLORS = ['#d94f3d', '#e8a13a', '#3f7fd9', '#4fae62', '#e5e5e5', '#7a4fd0', '#222831', '#e06ba8'];

@@ -7,9 +7,11 @@
 //
 // The game itself: an original open-world crime story in the invented coastal city of
 // Solmar. Dario Cruz walks the streets or steals and drives cars, traffic and
-// pedestrians fill the roads, the police answer a five-star wanted level, and three
-// story missions — pickup, delivery, getaway — pay out in cash, with a start screen,
-// a minimap HUD and a localStorage save.
+// pedestrians fill the roads, the police answer a five-star wanted level, and five
+// story missions — pickup, delivery, getaway, a bank vault crack under a screaming
+// alarm, and a timed last run to the boat — pay out in cash, across a full night
+// that falls from dusk to dawn, with a start screen, a minimap HUD with a dashed
+// mission route, a three-station pirate radio and a localStorage save.
 //
 // Serve it locally with `node serve.ts`, then open http://localhost:8080.
 // Outside the grader's container, MAKEFUN_OUTPUT_DIR stands in for /output:

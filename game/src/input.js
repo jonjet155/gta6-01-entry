@@ -1,6 +1,6 @@
 // Keyboard + mouse: WASD/arrows to move and drive, E to enter a car or work a
-// mission marker, F or click to shove, H to honk, M to mute, Enter/Space to
-// confirm, P or Escape to pause.
+// mission marker, F or click to shove, H to honk, R to change the radio station,
+// M to mute, Enter/Space to confirm, P or Escape to pause.
 //
 // Edge presses are tracked per key, and each reader only consumes the keys it
 // owns: takeActions() eats Enter/Space/P/Escape and leaves E, F and H alone,
@@ -70,12 +70,13 @@ export function createInput(canvas) {
         enter: wasPressed('KeyE'),
         punch: wasPressed('KeyF') || clicked,
         honk: wasPressed('KeyH'),
+        radio: wasPressed('KeyR'),
         dirX: dir.x,
         dirY: dir.y,
         mouseX: mouse.x,
         mouseY: mouse.y,
       };
-      consume('KeyE', 'KeyF', 'KeyH');
+      consume('KeyE', 'KeyF', 'KeyH', 'KeyR');
       clicked = false;
       return state;
     },

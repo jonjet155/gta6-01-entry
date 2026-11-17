@@ -1,6 +1,6 @@
-// The screenshot scenes behind ?shot=start|drive|foot. Each one plays the real rules
-// forward from a fresh world for a fixed number of steps, so the frame is what a short
-// game really looks like — and the same seed always gives the same frame.
+// The screenshot scenes behind ?shot=start|drive|foot|getaway|vault. Each one plays
+// the real rules forward from a fresh world for a fixed number of steps, so the frame
+// is what a short game really looks like — and the same seed always gives the same frame.
 import { STEP } from './config.js';
 import { EVENT_BUSTED, EVENT_COMPLETE } from './world.js';
 import { SCREEN_PLAY, SCREEN_TITLE } from './render.js';
@@ -86,14 +86,41 @@ function footAutopilot(world) {
 }
 
 /**
- * Set `world` to the named scene (start, drive, foot or getaway; any other name
- * is start) and return the screen to draw over it.
+ * Set `world` to the named scene (start, drive, foot, getaway or vault; any other
+ * name is start) and return the screen to draw over it.
  */
 export function stageShot(name, world) {
   world.reset();
-  if (name !== 'drive' && name !== 'foot' && name !== 'getaway') {
+  if (name !== 'drive' && name !== 'foot' && name !== 'getaway' && name !== 'vault') {
     for (let i = 0; i < START_SECONDS / STEP; i += 1) world.step(STEP, {}, true);
     return { screen: SCREEN_TITLE };
+  }
+  if (name === 'vault') {
+    // The fourth job: Dario on foot at the Solmar Bank door, the drill halfway
+    // through the vault, the alarm wailing, two patrol cars closing in — the
+    // heist at its hottest, under the midnight lamps.
+    const state = world.state;
+    state.missionIndex = 3;
+    state.wanted = 2;
+    state.clock = 0.5;
+    state.player.x = 1900;
+    state.player.y = 830;
+    state.player.angle = -Math.PI / 2;
+    state.player.onFoot = true;
+    state.police.push(
+      { kind: 'police', x: 1760, y: 1080, angle: -Math.PI / 2, speed: 180, color: '#1d2a44', siren: 0 },
+      { kind: 'police', x: 2080, y: 1120, angle: -Math.PI / 2, speed: 160, color: '#1d2a44', siren: 2 },
+    );
+    for (let i = 0; i < 2.5 / STEP; i += 1) world.step(STEP, {}, true);
+    // Set the crack after the ambient steps: stepping with the drill running
+    // would finish the vault before the frame is taken.
+    state.vaultCracking = true;
+    state.vaultProgress = 0.55;
+    state.alarmTimer = 3;
+    state.nearTarget = true;
+    state.message = 'Alarm! Stay at the vault door while the drill works.';
+    state.messageTimer = 4;
+    return { screen: SCREEN_PLAY };
   }
   if (name === 'getaway') {
     // The third job: three stars, three patrol cars, Dario racing north up
@@ -112,6 +139,7 @@ export function stageShot(name, world) {
     state.missionIndex = 2;
     state.wanted = 3;
     state.damage = 55;
+    state.clock = 0.08;
     state.police.push(
       { kind: 'police', x: 1440, y: 1560, angle: -Math.PI / 2, speed: 220, color: '#1d2a44', siren: 0 },
       { kind: 'police', x: 1440, y: 1640, angle: -Math.PI / 2, speed: 200, color: '#1d2a44', siren: 2 },
@@ -130,7 +158,8 @@ export function stageShot(name, world) {
   }
   if (name === 'drive') {
     // Dario in a car heading north up Coral Row toward the Neon Palms job, wanted
-    // level 2, two patrol cars on his tail — the whole game in one frame.
+    // level 2, two patrol cars on his tail, near midnight — headlights on, lamps
+    // glowing, the gold route to the hotel dashed on the minimap and the street.
     const state = world.state;
     const car = { kind: 'player', x: 480, y: 1300, angle: -Math.PI / 2, speed: 260, color: '#f2f2f2' };
     state.cars.push(car);
@@ -142,6 +171,7 @@ export function stageShot(name, world) {
     state.player.speed = 260;
     state.missionIndex = 1;
     state.wanted = 2;
+    state.clock = 0.45;
     state.police.push(
       { kind: 'police', x: 480, y: 1560, angle: -Math.PI / 2, speed: 200, color: '#1d2a44', siren: 0 },
       { kind: 'police', x: 480, y: 1640, angle: -Math.PI / 2, speed: 180, color: '#1d2a44', siren: 2 },
@@ -154,8 +184,9 @@ export function stageShot(name, world) {
     return { screen: SCREEN_PLAY };
   }
   // Foot: Dario on the sidewalk by the park, walking up to a parked car, pedestrians
-  // about, the hotel job on the HUD.
+  // about, the hotel job on the HUD — at dusk, the lamps just coming on.
   world.state.missionIndex = 1;
+  world.state.clock = 0.12;
   let events = 0;
   for (let i = 0; i < FOOT_SECONDS / STEP; i += 1) {
     events = world.step(STEP, footAutopilot(world), false);

@@ -6,7 +6,7 @@
 // instead of running the loop, paints it twice and sets window.__shotReady for a screenshot.
 import { SAVE_KEY, STEP } from './config.js';
 import { createRandom } from './random.js';
-import { createWorld, EVENT_BUSTED, EVENT_COMPLETE, EVENT_CRIME, EVENT_HONK, EVENT_PICKUP, EVENT_DELIVERED, EVENT_THUD } from './world.js';
+import { createWorld, EVENT_ALARM, EVENT_BUSTED, EVENT_COMPLETE, EVENT_CRIME, EVENT_HONK, EVENT_PICKUP, EVENT_DELIVERED, EVENT_THUD } from './world.js';
 import { ACTION_CONFIRM, ACTION_MUTE, ACTION_PAUSE, createInput } from './input.js';
 import { createAudio } from './audio.js';
 import { createRenderer, SCREEN_BUSTED, SCREEN_PAUSED, SCREEN_PLAY, SCREEN_TITLE, SCREEN_WIN } from './render.js';
@@ -66,6 +66,8 @@ function runGame() {
 
   let accumulator = 0;
   let last = performance.now();
+  // The vault drill's tick bucket, so the tick sounds once per 5% of progress.
+  let lastTickBucket = -1;
 
   // Screen readers (and anyone watching the page's text) hear the screen changes.
   function announce(message) {
@@ -83,7 +85,7 @@ function runGame() {
     }
     accumulator = 0;
     screen = SCREEN_PLAY;
-    announce('Playing Solmar Heat. Three jobs before sunrise.');
+    announce('Playing Solmar Heat. Five jobs before sunrise.');
   }
 
   function endBusted() {
@@ -134,12 +136,17 @@ function runGame() {
         if (events & EVENT_THUD) audio.thud();
         if (events & EVENT_CRIME) audio.crime();
         if (events & EVENT_HONK) audio.horn();
+        if (events & EVENT_ALARM) audio.alarm();
         if (events & (EVENT_PICKUP | EVENT_DELIVERED)) audio.mission();
         if (events & EVENT_BUSTED) { audio.busted(); endBusted(); break; }
         if (events & EVENT_COMPLETE) { endWin(); break; }
       }
       const player = world.state.player;
-      audio.update(player.onFoot ? 0 : Math.abs(player.speed) / 430, world.state.wanted);
+      audio.update(player.onFoot ? 0 : Math.abs(player.speed) / 430, world.state.wanted, world.state.station);
+      // The drill ticks as the vault crack climbs, one tick per 5% of progress.
+      const tickBucket = world.state.vaultCracking ? Math.floor(world.state.vaultProgress * 20) : -1;
+      if (tickBucket >= 0 && tickBucket !== lastTickBucket) audio.tick();
+      lastTickBucket = tickBucket;
       if (world.state.missionIndex > 0 || world.state.cash > 0) writeSave();
     }
     const saveForTitle = screen === SCREEN_TITLE ? save : null;

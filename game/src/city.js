@@ -93,6 +93,15 @@ export function generateCity(rng) {
         });
         continue;
       }
+      // The Solmar Bank owns its whole block too: a squat gold building in Marina
+      // Heights, with a vault door on the street side — the fourth job's target.
+      if (col === 5 && row === 1) {
+        buildings.push({
+          x: (x0 + x1) / 2 - 70, y: (y0 + y1) / 2 - 55, w: 140, h: 110,
+          color: PALETTE.roofGold, floors: 3, bank: true,
+        });
+        continue;
+      }
       const count = int(rng, 1, 3);
       if (count === 1) {
         buildings.push({
@@ -118,6 +127,7 @@ export function generateCity(rng) {
   }
 
   const hotel = buildings.find((b) => b.hotel) ?? { x: 1215, y: 255, w: 130, h: 130, color: PALETTE.roofTeal, floors: 9, hotel: true };
+  const bank = buildings.find((b) => b.bank) ?? { x: 1850, y: 585, w: 140, h: 110, color: PALETTE.roofGold, floors: 3, bank: true };
 
   // Parked cars along a few curbs, for the player to steal.
   const curbSpots = [
@@ -153,6 +163,7 @@ export function generateCity(rng) {
     { name: 'SAFEHOUSE', x: 240, y: 240 },
     { name: 'PALM COURT', x: 2080, y: 800 },
     { name: 'THE PARK', x: 640, y: 1120 },
+    { name: 'SOLMAR BANK', x: 1920, y: 620 },
   ];
 
   return {
@@ -165,6 +176,7 @@ export function generateCity(rng) {
     plaza: { x: ROAD_AXES_V[plazaCol] + half + pad, y: ROAD_AXES_H[plazaRow] + half + pad, w: 320 - ROAD_WIDTH - pad * 2, h: 320 - ROAD_WIDTH - pad * 2 },
     park: { x: ROAD_AXES_V[parkCol] + half + pad, y: ROAD_AXES_H[parkRow] + half + pad, w: 320 - ROAD_WIDTH - pad * 2, h: 320 - ROAD_WIDTH - pad * 2 },
     hotel,
+    bank,
     playerSpawn: { x: 480, y: 560 },
     pier: { x0: 560, x1: 2000, y: DOCKS_Y },
   };

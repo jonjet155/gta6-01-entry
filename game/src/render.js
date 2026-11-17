@@ -1,6 +1,8 @@
 // SOLMAR HEAT — the renderer: one canvas, top-down. The city, the cars, the people,
-// the HUD with its minimap, and the title / pause / busted / finished screens.
-import { CAR_LENGTH, CAR_SMOKE_DAMAGE, CAR_WIDTH, MISSIONS, PALETTE, ROAD_AXES_H, ROAD_AXES_V, ROAD_WIDTH, SPEED_KMH, WATER_Y, WORLD } from './config.js';
+// the night that falls over them, the HUD with its minimap and mission route, and
+// the title / pause / busted / finished screens.
+import { CAR_LENGTH, CAR_SMOKE_DAMAGE, CAR_WIDTH, MISSIONS, PALETTE, ROAD_AXES_H, ROAD_AXES_V, ROAD_WIDTH, SPEED_KMH, STATIONS, TRAFFIC_LIGHT_CYCLE, WATER_Y, WORLD } from './config.js';
+import { nearestRoad } from './city.js';
 
 export const SCREEN_TITLE = 'title';
 export const SCREEN_PLAY = 'play';
@@ -10,6 +12,59 @@ export const SCREEN_WIN = 'win';
 
 const TITLE_FONT = '"Arial Black", "Segoe UI", sans-serif';
 const BODY_FONT = '"Segoe UI", Arial, sans-serif';
+
+/**
+ * How dark the night is at this clock: 0 at dusk and dawn, 1 at the darkest
+ * hour (01:00). The renderer uses it for the blue wash, the lamps and the
+ * windows that light up after dark.
+ */
+export function darknessFor(clock) {
+  return Math.sin(Math.PI * Math.max(0, Math.min(1, clock)));
+}
+
+/** The clock as a wall time: 21:00 at dusk, 05:00 at dawn, plus NIGHT/DAY. */
+export function clockLabel(clock) {
+  const minutes = 21 * 60 + Math.floor(clock * 480);
+  const hh = Math.floor(minutes / 60) % 24;
+  const mm = minutes % 60;
+  const phase = clock > 0.12 && clock < 0.88 ? 'NIGHT' : 'DUSK';
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')} · ${phase}`;
+}
+
+/**
+ * The mission route as world points: the player, then a path that stays on the
+ * road grid — along the player's road, across on a cross street, along the
+ * target's road, and the last steps to the marker itself. The minimap and the
+ * main view both draw this one path.
+ */
+export function missionRoutePoints(state) {
+  const mission = MISSIONS[state.missionIndex];
+  if (!mission || state.completed) return [];
+  const player = state.player;
+  const target = mission.target;
+  const s = nearestRoad(player.x, player.y);
+  const e = nearestRoad(target.x, target.y);
+  const sPoint = s.vertical ? { x: s.axis, y: player.y } : { x: player.x, y: s.axis };
+  const ePoint = e.vertical ? { x: e.axis, y: target.y } : { x: target.x, y: e.axis };
+  const points = [{ x: player.x, y: player.y }, sPoint];
+  if (s.vertical && e.vertical) {
+    // Both roads run north-south: cross on the street nearest the target.
+    let mid = ROAD_AXES_H[0];
+    for (const axis of ROAD_AXES_H) if (Math.abs(axis - ePoint.y) < Math.abs(mid - ePoint.y)) mid = axis;
+    points.push({ x: s.axis, y: mid }, { x: e.axis, y: mid });
+  } else if (s.vertical && e.horizontal) {
+    points.push({ x: s.axis, y: e.axis });
+  } else if (s.horizontal && e.vertical) {
+    points.push({ x: e.axis, y: s.axis });
+  } else {
+    // Both roads run east-west: cross on the avenue nearest the target.
+    let mid = ROAD_AXES_V[0];
+    for (const axis of ROAD_AXES_V) if (Math.abs(axis - ePoint.x) < Math.abs(mid - ePoint.x)) mid = axis;
+    points.push({ x: mid, y: s.axis }, { x: mid, y: e.axis });
+  }
+  points.push(ePoint, { x: target.x, y: target.y });
+  return points;
+}
 
 function roundRect(ctx, x, y, w, h, r) {
   ctx.beginPath();
@@ -93,11 +148,13 @@ export function createRenderer(canvas) {
       ctx.strokeRect(crate.x + 1, crate.y + 1, crate.s - 2, crate.s - 2);
     }
 
-    // Street lamps on the avenue corners, with a warm glow.
+    // Street lamps on the avenue corners, with a warm glow that grows as the
+    // night deepens — by midnight they are the brightest things on the street.
+    const dark = darknessFor(state.clock);
     for (const lamp of city.lamps) {
-      ctx.fillStyle = 'rgba(255,217,138,0.18)';
+      ctx.fillStyle = `rgba(255,217,138,${(0.18 + dark * 0.3).toFixed(2)})`;
       ctx.beginPath();
-      ctx.arc(lamp.x, lamp.y, 14, 0, Math.PI * 2);
+      ctx.arc(lamp.x, lamp.y, 14 + dark * 22, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = PALETTE.lamp;
       ctx.beginPath();
@@ -132,6 +189,36 @@ export function createRenderer(canvas) {
       for (let x = Math.floor(cam.x / 48) * 48; x < cam.x + viewW; x += 48) ctx.fillRect(x, axis - 2, 24, 4);
     }
 
+    // Traffic lights at every intersection: a pole on the corner with two
+    // lamps — the upper one for the avenue running north-south, the lower one
+    // for the street running east-west — green one way, red the other, swapping
+    // every TRAFFIC_LIGHT_CYCLE seconds. They glow harder after dark.
+    const greenForVertical = Math.floor(state.time / TRAFFIC_LIGHT_CYCLE) % 2 === 0;
+    for (const axis of ROAD_AXES_V) {
+      for (const cross of ROAD_AXES_H) {
+        if (cross >= WATER_Y) continue;
+        const lx = axis + ROAD_WIDTH / 2 + 8;
+        const ly = cross - ROAD_WIDTH / 2 - 8;
+        if (lx < cam.x - 24 || lx > cam.x + viewW + 24 || ly < cam.y - 24 || ly > cam.y + viewH + 24) continue;
+        if (dark > 0.3) {
+          ctx.fillStyle = `rgba(255,60,60,${(dark * 0.12).toFixed(2)})`;
+          ctx.beginPath();
+          ctx.arc(lx, ly - 5, 9, 0, Math.PI * 2);
+          ctx.fill();
+        }
+        ctx.fillStyle = '#222831';
+        ctx.fillRect(lx - 3, ly - 11, 6, 22);
+        ctx.fillStyle = greenForVertical ? PALETTE.lightGreen : PALETTE.lightRed;
+        ctx.beginPath();
+        ctx.arc(lx, ly - 6, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = greenForVertical ? PALETTE.lightRed : PALETTE.lightGreen;
+        ctx.beginPath();
+        ctx.arc(lx, ly + 6, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
     // Trees.
     for (const tree of city.trees) {
       if (tree.x < cam.x - 30 || tree.x > cam.x + viewW + 30 || tree.y < cam.y - 30 || tree.y > cam.y + viewH + 30) continue;
@@ -159,7 +246,10 @@ export function createRenderer(canvas) {
       ctx.strokeStyle = 'rgba(0,0,0,0.25)';
       ctx.lineWidth = 2;
       ctx.strokeRect(b.x + 1, b.y + 1, b.w - 2, b.h - 2);
-      ctx.fillStyle = 'rgba(255,255,255,0.28)';
+      // Windows: pale by day, and a third of the buildings light up warm
+      // after dark, so the night city reads as lived-in, not empty.
+      const lit = dark > 0.35 && ((b.x * 7 + b.y * 13) % 3 === 0);
+      ctx.fillStyle = lit ? PALETTE.windowLit : 'rgba(255,255,255,0.28)';
       const cols = Math.max(1, Math.floor(b.w / 26));
       const rows = Math.max(1, Math.min(b.floors, Math.floor(b.h / 24)));
       for (let r = 0; r < rows; r += 1) {
@@ -175,6 +265,15 @@ export function createRenderer(canvas) {
         ctx.fillStyle = '#ff5f8f';
         ctx.font = `bold 10px ${BODY_FONT}`;
         ctx.fillText('HOTEL', b.x + b.w / 2, b.y + b.h / 2 + 14);
+      }
+      if (b.bank) {
+        ctx.fillStyle = '#fff3c4';
+        ctx.font = `bold 13px ${BODY_FONT}`;
+        ctx.textAlign = 'center';
+        ctx.fillText('SOLMAR BANK', b.x + b.w / 2, b.y + b.h / 2 - 2);
+        ctx.fillStyle = '#7a5b00';
+        ctx.font = `bold 9px ${BODY_FONT}`;
+        ctx.fillText('VAULT', b.x + b.w / 2, b.y + b.h / 2 + 12);
       }
     }
   }
@@ -311,6 +410,23 @@ export function createRenderer(canvas) {
     ctx.fillRect(x - 3, y - 120, 6, 120);
   }
 
+  // The mission route, dashed on the street itself so the driver can follow
+  // it without looking away at the minimap.
+  function drawRoute(state) {
+    const points = missionRoutePoints(state);
+    if (points.length < 2) return;
+    ctx.save();
+    ctx.strokeStyle = 'rgba(255,210,62,0.55)';
+    ctx.lineWidth = 5;
+    ctx.setLineDash([16, 12]);
+    ctx.lineDashOffset = -state.time * 30;
+    ctx.beginPath();
+    ctx.moveTo(points[0].x, points[0].y);
+    for (let i = 1; i < points.length; i += 1) ctx.lineTo(points[i].x, points[i].y);
+    ctx.stroke();
+    ctx.restore();
+  }
+
   // Screen space: the arrow sits at the screen edge, pointing at the off-screen marker.
   function drawEdgeArrow(state, cam) {
     const mission = MISSIONS[state.missionIndex];
@@ -382,6 +498,19 @@ export function createRenderer(canvas) {
     }
     const mission = MISSIONS[state.missionIndex];
     if (mission && !state.completed) {
+      // The route to the marker, dashed gold on the minimap — the same path
+      // the main view paints on the street.
+      const route = missionRoutePoints(state);
+      if (route.length >= 2) {
+        ctx.strokeStyle = PALETTE.route;
+        ctx.lineWidth = 2;
+        ctx.setLineDash([5, 4]);
+        ctx.beginPath();
+        ctx.moveTo(mx + route[0].x * sx, my + route[0].y * sy);
+        for (let i = 1; i < route.length; i += 1) ctx.lineTo(mx + route[i].x * sx, my + route[i].y * sy);
+        ctx.stroke();
+        ctx.setLineDash([]);
+      }
       const pulse = 4 + Math.sin(state.time * 4) * 1.5;
       ctx.fillStyle = '#ffd23e';
       ctx.beginPath();
@@ -434,7 +563,7 @@ export function createRenderer(canvas) {
     ctx.font = `13px ${BODY_FONT}`;
     const text = state.completed ? 'All three jobs finished. Solmar is yours — keep driving.' : mission.text;
     wrapText(text, 24, 118, 306, 16);
-    if (state.nearTarget && !state.completed) {
+    if (state.nearTarget && !state.completed && !state.vaultCracking) {
       ctx.fillStyle = '#ffd23e';
       ctx.font = `bold 14px ${BODY_FONT}`;
       ctx.fillText('Press E', 24, 100 + 34);
@@ -466,10 +595,12 @@ export function createRenderer(canvas) {
       }
     }
 
-    // Controls hint, bottom left.
+    // Controls hint, bottom left — and the radio station above it.
+    const station = STATIONS[state.station] ?? STATIONS[0];
     ctx.fillStyle = 'rgba(255,255,255,0.75)';
     ctx.font = `12px ${BODY_FONT}`;
-    ctx.fillText(p.onFoot ? 'WASD walk · E enter car · F shove · P pause · M mute' : 'WASD drive · E get out · H horn · P pause · M mute', 16, viewH - 16);
+    ctx.fillText(`♪ ${station.name} — ${station.blurb} · R change station`, 16, viewH - 34);
+    ctx.fillText(p.onFoot ? 'WASD walk · E enter car · F shove · R radio · P pause · M mute' : 'WASD drive · E get out · H horn · R radio · P pause · M mute', 16, viewH - 16);
 
     // Toast message, top centre.
     if (state.message && state.messageTimer > 0) {
@@ -481,6 +612,69 @@ export function createRenderer(canvas) {
       ctx.fillStyle = '#ffffff';
       ctx.textAlign = 'center';
       ctx.fillText(state.message, viewW / 2, 37);
+      ctx.textAlign = 'left';
+    }
+
+    // The night clock, top right, just left of the minimap — the hour and
+    // whether the city is at dusk or in the deep night.
+    ctx.font = `bold 14px ${BODY_FONT}`;
+    const clockText = clockLabel(state.clock);
+    const clockW = ctx.measureText(clockText).width + 24;
+    const clockX = viewW - 222 - clockW - 12;
+    ctx.fillStyle = 'rgba(12,16,24,0.72)';
+    roundRect(ctx, clockX, 14, clockW, 30, 8);
+    ctx.fill();
+    ctx.fillStyle = '#ffd98a';
+    ctx.textAlign = 'left';
+    ctx.fillText(clockText, clockX + 12, 34);
+
+    // The last run's countdown, big and red under the toast slot.
+    if (mission?.id === 'lastrun' && !state.completed && state.missionTimer > 0) {
+      const secs = Math.max(0, Math.ceil(state.missionTimer));
+      const timerText = `BOAT LEAVES IN ${Math.floor(secs / 60)}:${String(secs % 60).padStart(2, '0')}`;
+      ctx.font = `bold 16px ${BODY_FONT}`;
+      const tw = ctx.measureText(timerText).width + 28;
+      ctx.fillStyle = 'rgba(120,10,16,0.85)';
+      roundRect(ctx, (viewW - tw) / 2, 56, tw, 32, 8);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.fillText(timerText, viewW / 2, 78);
+      ctx.textAlign = 'left';
+    }
+
+    // The vault alarm, flashing red while it lasts.
+    if (state.alarmTimer > 0 && Math.sin(state.time * 8) > -0.2) {
+      const alarmText = '⚠ ALARM — THE VAULT IS BLOWN';
+      ctx.font = `bold 16px ${BODY_FONT}`;
+      const aw = ctx.measureText(alarmText).width + 28;
+      ctx.fillStyle = 'rgba(120,10,16,0.85)';
+      roundRect(ctx, (viewW - aw) / 2, 56, aw, 32, 8);
+      ctx.fill();
+      ctx.fillStyle = '#ffffff';
+      ctx.textAlign = 'center';
+      ctx.fillText(alarmText, viewW / 2, 78);
+      ctx.textAlign = 'left';
+    }
+
+    // The vault drill's progress, a bar across the lower third of the screen.
+    if (state.vaultCracking) {
+      const barW = 320;
+      const barX = (viewW - barW) / 2;
+      const barY = Math.round(viewH * 0.72);
+      ctx.fillStyle = 'rgba(12,16,24,0.8)';
+      roundRect(ctx, barX - 10, barY - 26, barW + 20, 52, 8);
+      ctx.fill();
+      ctx.fillStyle = '#ffd23e';
+      ctx.font = `bold 14px ${BODY_FONT}`;
+      ctx.textAlign = 'center';
+      ctx.fillText(`CRACKING THE VAULT… ${Math.floor(state.vaultProgress * 100)}%`, viewW / 2, barY - 8);
+      ctx.fillStyle = 'rgba(255,255,255,0.2)';
+      roundRect(ctx, barX, barY, barW, 12, 6);
+      ctx.fill();
+      ctx.fillStyle = PALETTE.bankGold;
+      roundRect(ctx, barX, barY, Math.max(12, barW * state.vaultProgress), 12, 6);
+      ctx.fill();
       ctx.textAlign = 'left';
     }
 
@@ -526,24 +720,26 @@ export function createRenderer(canvas) {
 
     ctx.fillStyle = 'rgba(12,16,24,0.72)';
     const panelW = 560;
-    roundRect(ctx, (viewW - panelW) / 2, viewH * 0.48, panelW, 132, 10);
+    roundRect(ctx, (viewW - panelW) / 2, viewH * 0.48, panelW, 180, 10);
     ctx.fill();
     ctx.fillStyle = '#ffffff';
     ctx.font = `15px ${BODY_FONT}`;
-    ctx.fillText('Dario Cruz owes the Solmar crew three jobs before sunrise:', viewW / 2, viewH * 0.48 + 30);
+    ctx.fillText('Dario Cruz owes the Solmar crew five jobs before sunrise:', viewW / 2, viewH * 0.48 + 30);
     ctx.fillStyle = '#ffd23e';
     ctx.font = `bold 15px ${BODY_FONT}`;
     ctx.fillText('1 · Pick up the package at the docks', viewW / 2, viewH * 0.48 + 58);
     ctx.fillText('2 · Deliver it to the Neon Palms hotel', viewW / 2, viewH * 0.48 + 82);
     ctx.fillText('3 · Lose the cops and reach the safehouse', viewW / 2, viewH * 0.48 + 106);
+    ctx.fillText('4 · Crack the Solmar Bank vault — mind the alarm', viewW / 2, viewH * 0.48 + 130);
+    ctx.fillText('5 · Outrun the clock to the boat at the pier', viewW / 2, viewH * 0.48 + 154);
 
     ctx.fillStyle = '#e8ecf2';
     ctx.font = `14px ${BODY_FONT}`;
-    ctx.fillText('WASD move / drive · E enter a car or work a marker · F shove · P pause', viewW / 2, viewH * 0.48 + 158);
+    ctx.fillText('WASD move / drive · E enter a car or work a marker · F shove · R radio · P pause', viewW / 2, viewH * 0.48 + 206);
     if (save && (save.cash > 0 || save.missionIndex > 0)) {
       ctx.fillStyle = '#7dff8a';
       ctx.font = `bold 15px ${BODY_FONT}`;
-      ctx.fillText(`Saved job found: $${save.cash}, mission ${save.missionIndex + 1} of 3 — press ENTER to continue it.`, viewW / 2, viewH * 0.48 + 184);
+      ctx.fillText(`Saved job found: $${save.cash}, mission ${save.missionIndex + 1} of 5 — press ENTER to continue it.`, viewW / 2, viewH * 0.48 + 232);
     }
     const blink = Math.sin(state.time * 3) > -0.9;
     if (blink) {
@@ -578,6 +774,7 @@ export function createRenderer(canvas) {
     ctx.translate(-cam.x, -cam.y);
     drawCity(state, cam);
     drawMissionMarker(state);
+    drawRoute(state);
     for (const car of state.cars) drawCar(car, false);
     for (const cop of state.police) drawCar(cop, false);
     for (const ped of state.peds) drawPed(ped);
@@ -586,6 +783,17 @@ export function createRenderer(canvas) {
     drawPlayer(state);
     drawParticles(state);
     ctx.restore();
+
+    // Night falls over the city — a deep blue wash, darkest at 01:00, that the
+    // HUD sits above so the stars, cash and minimap stay readable. The title
+    // screen keeps its own dusk gradient instead.
+    if (screen !== SCREEN_TITLE) {
+      const alpha = darknessFor(state.clock) * 0.32;
+      if (alpha > 0.01) {
+        ctx.fillStyle = `rgba(${PALETTE.night},${alpha.toFixed(2)})`;
+        ctx.fillRect(0, 0, viewW, viewH);
+      }
+    }
 
     if (screen === SCREEN_TITLE) {
       drawTitle(state, extra.save ?? null);
@@ -597,7 +805,7 @@ export function createRenderer(canvas) {
     } else if (screen === SCREEN_BUSTED) {
       drawEndOverlay('BUSTED', [`The Solmar PD got Dario. Cash kept: $${state.cash}.`, 'The crew is not done with you yet.'], '#ff5f5f');
     } else if (screen === SCREEN_WIN) {
-      drawEndOverlay('JOB DONE', [`All three jobs finished. $${state.cash} in the bag.`, 'Solmar is yours — keep driving, or start over.'], '#7dff8a');
+      drawEndOverlay('JOB DONE', [`All five jobs finished. $${state.cash} in the bag.`, 'Solmar is yours — keep driving, or start over.'], '#7dff8a');
     }
   }
 

@@ -1,11 +1,13 @@
 // SOLMAR HEAT — the world: the player on foot or in a car, traffic, pedestrians,
-// police, the wanted level and the three-mission story. One fixed step at a time.
+// police, the wanted level, the night clock and the five-mission story. One fixed
+// step at a time.
 import {
-  CAR_COLORS, CAR_HP_MAX, CAR_LENGTH, CAR_SMOKE_DAMAGE, CAR_WIDTH, DISTRICTS, HONK_FLEE_SECONDS,
-  MISSIONS, PED_COLORS, PED_COUNT, PED_SPEED_MAX, PED_SPEED_MIN, PLAYER_CAR_ACCEL, PLAYER_CAR_BRAKE,
-  PLAYER_CAR_MAX, PLAYER_CAR_REVERSE_MAX, PLAYER_WALK_SPEED, POLICE_SPAWN_DISTANCE, POLICE_SPEED,
-  ROAD_AXES_H, ROAD_AXES_V, ROAD_WIDTH, TRAFFIC_COUNT, TRAFFIC_SPEED_MAX, TRAFFIC_SPEED_MIN,
-  WANTED_DECAY_SECONDS, WANTED_MAX, WANTED_SIGHT_RANGE, WORLD,
+  CAR_COLORS, CAR_HP_MAX, CAR_LENGTH, CAR_SMOKE_DAMAGE, CAR_WIDTH, CLOCK_DAY_SECONDS, CLOCK_START,
+  DISTRICTS, HONK_FLEE_SECONDS, LAST_RUN_SECONDS, MISSIONS, PED_COLORS, PED_COUNT, PED_SPEED_MAX,
+  PED_SPEED_MIN, PLAYER_CAR_ACCEL, PLAYER_CAR_BRAKE, PLAYER_CAR_MAX, PLAYER_CAR_REVERSE_MAX,
+  PLAYER_WALK_SPEED, POLICE_SPAWN_DISTANCE, POLICE_SPEED, ROAD_AXES_H, ROAD_AXES_V, ROAD_WIDTH,
+  STATIONS, TRAFFIC_COUNT, TRAFFIC_LIGHT_CYCLE, TRAFFIC_SPEED_MAX, TRAFFIC_SPEED_MIN, VAULT_ALARM_WANTED,
+  VAULT_CRACK_SECONDS, WANTED_DECAY_SECONDS, WANTED_MAX, WANTED_SIGHT_RANGE, WORLD,
 } from './config.js';
 import { generateCity, hitsBuilding, inWater } from './city.js';
 import { int, pick, range } from './random.js';
@@ -18,6 +20,7 @@ export const EVENT_COMPLETE = 8;
 export const EVENT_CRIME = 16;
 export const EVENT_THUD = 32;
 export const EVENT_HONK = 64;
+export const EVENT_ALARM = 128;
 
 const LANE = 22;
 const SIDEWALK = ROAD_WIDTH / 2 + 12;
@@ -65,6 +68,18 @@ export function createWorld(rng, seed) {
     smokeTimer: 0,
     honkTimer: 0,
     district: 'CORAL ROW',
+    // The night clock: 0 is dusk (21:00), 0.5 is the darkest hour (01:00),
+    // 1 is dawn (05:00). A whole night lasts CLOCK_DAY_SECONDS of play.
+    clock: CLOCK_START,
+    // The vault job: cracking runs only while Dario stays at the bank door.
+    vaultCracking: false,
+    vaultProgress: 0,
+    // The last run's countdown, in seconds; 0 means no timer is running.
+    missionTimer: 0,
+    // Seconds left on the vault alarm's flashing banner.
+    alarmTimer: 0,
+    // Which pirate radio station is playing (index into STATIONS).
+    station: 0,
   };
 
   function say(text, seconds = 3) {
@@ -198,6 +213,12 @@ export function createWorld(rng, seed) {
     state.smokeTimer = 0;
     state.honkTimer = 0;
     state.district = 'CORAL ROW';
+    state.clock = CLOCK_START;
+    state.vaultCracking = false;
+    state.vaultProgress = 0;
+    state.missionTimer = 0;
+    state.alarmTimer = 0;
+    state.station = 0;
   }
 
   function updateTraffic(dt) {
@@ -220,6 +241,22 @@ export function createWorld(rng, seed) {
           break;
         }
       }
+      // Traffic lights: at an intersection the cross traffic gets the green
+      // while this road waits. A car stops at the stop line when its light is
+      // red — it never runs a red into the crossing. The light is green for
+      // the north-south roads half the cycle, then for the east-west roads.
+      // (Recomputed here: the turn above may have changed the car's road.)
+      let redAhead = false;
+      const crossAxes = car.vertical ? ROAD_AXES_H : ROAD_AXES_V;
+      for (const cross of crossAxes) {
+        const gap = (cross - car.along) * car.dir;
+        if (gap > 0 && gap < 80) {
+          const greenForVertical = Math.floor(state.time / TRAFFIC_LIGHT_CYCLE) % 2 === 0;
+          const greenForMe = car.vertical ? greenForVertical : !greenForVertical;
+          if (!greenForMe) redAhead = true;
+          break;
+        }
+      }
       // Slow down for the car ahead in the same lane.
       let ahead = Infinity;
       for (const other of state.cars) {
@@ -227,7 +264,7 @@ export function createWorld(rng, seed) {
         const gap = (other.along - car.along) * car.dir;
         if (gap > 0 && gap < ahead) ahead = gap;
       }
-      const targetSpeed = ahead < 70 ? 0 : range(rng, TRAFFIC_SPEED_MIN, TRAFFIC_SPEED_MAX) * (ahead < 130 ? 0.5 : 1);
+      const targetSpeed = redAhead || ahead < 70 ? 0 : range(rng, TRAFFIC_SPEED_MIN, TRAFFIC_SPEED_MAX) * (ahead < 130 ? 0.5 : 1);
       car.speed += (targetSpeed - car.speed) * Math.min(1, dt * 2);
       placeTrafficCar(car);
     }
@@ -406,17 +443,11 @@ export function createWorld(rng, seed) {
     return EVENT_NONE;
   }
 
-  function tryMissionAction() {
-    const mission = currentMission();
-    if (!mission || state.completed) return EVENT_NONE;
-    const player = state.player;
-    const d = dist(player.x, player.y, mission.target.x, mission.target.y);
-    if (d > 80) return EVENT_NONE;
-    if (state.missionIndex === 2 && state.wanted > 0) {
-      say('Lose the heat first — the safehouse is watched while you are wanted.');
-      return EVENT_NONE;
-    }
-    if (state.missionIndex === 0) state.hasPackage = true;
+  /**
+   * Pay out a finished mission and advance the story. Shared by the E action
+   * and by the vault, which finishes itself once the crack hits 100%.
+   */
+  function finishMission(mission) {
     state.cash += mission.reward;
     // The crew patches the car up between jobs — a finished mission is worth
     // more than the cash when the car is already smoking.
@@ -428,14 +459,90 @@ export function createWorld(rng, seed) {
       return EVENT_COMPLETE;
     }
     const next = MISSIONS[state.missionIndex];
-    say(`${mission.title} complete! +$${mission.reward}. Next: ${next.title}`, 4);
+    if (next.id === 'lastrun') {
+      // The boat leaves on a clock: the last run starts the moment the vault pays.
+      state.missionTimer = LAST_RUN_SECONDS;
+      say(`${mission.title} complete! +$${mission.reward}. The boat leaves in ${LAST_RUN_SECONDS}s — RUN!`, 4);
+    } else {
+      say(`${mission.title} complete! +$${mission.reward}. Next: ${next.title}`, 4);
+    }
     return EVENT_PICKUP | EVENT_DELIVERED;
+  }
+
+  function tryMissionAction() {
+    const mission = currentMission();
+    if (!mission || state.completed) return EVENT_NONE;
+    const player = state.player;
+    const d = dist(player.x, player.y, mission.target.x, mission.target.y);
+    if (d > 80) return EVENT_NONE;
+    if (state.missionIndex === 2 && state.wanted > 0) {
+      say('Lose the heat first — the safehouse is watched while you are wanted.');
+      return EVENT_NONE;
+    }
+    if (mission.id === 'vault') {
+      // E at the bank starts the drill. The alarm goes off at once — two more
+      // stars, a flashing banner — and the crack only moves while Dario stays
+      // at the door. Pressing E again while it runs does nothing.
+      if (state.vaultCracking) return EVENT_NONE;
+      state.vaultCracking = true;
+      state.vaultProgress = 0;
+      state.alarmTimer = 6;
+      say('Alarm! Stay at the vault door while the drill works.', 4);
+      return addWanted(VAULT_ALARM_WANTED) | EVENT_ALARM;
+    }
+    if (state.missionIndex === 0) state.hasPackage = true;
+    return finishMission(mission);
+  }
+
+  /**
+   * The vault drill, advanced once per step: it moves only while Dario is at
+   * the bank door, and pays out the moment it reaches 100%.
+   */
+  function updateVault(dt) {
+    if (!state.vaultCracking) return EVENT_NONE;
+    const mission = currentMission();
+    if (!mission || mission.id !== 'vault') {
+      state.vaultCracking = false;
+      state.vaultProgress = 0;
+      return EVENT_NONE;
+    }
+    const player = state.player;
+    const d = dist(player.x, player.y, mission.target.x, mission.target.y);
+    if (d > 90) {
+      // Out of range: the drill waits. The progress stays, so Dario can duck
+      // away from a patrol car and come back to finish the job.
+      return EVENT_NONE;
+    }
+    state.vaultProgress += dt / VAULT_CRACK_SECONDS;
+    if (state.vaultProgress < 1) return EVENT_NONE;
+    state.vaultCracking = false;
+    state.vaultProgress = 0;
+    return finishMission(mission);
+  }
+
+  /**
+   * The last run's countdown: the boat leaves when it hits zero, and the crew
+   * gives Dario one more shot from the top of the timer.
+   */
+  function updateMissionTimer(dt) {
+    const mission = currentMission();
+    if (!mission || mission.id !== 'lastrun' || state.completed) return;
+    if (state.missionTimer <= 0) state.missionTimer = LAST_RUN_SECONDS;
+    state.missionTimer -= dt;
+    if (state.missionTimer <= 0) {
+      state.missionTimer = LAST_RUN_SECONDS;
+      say('Too slow — the boat left without you. One more shot — run!', 4);
+    }
   }
 
   function step(dt, input, attract) {
     state.time += dt;
     if (state.messageTimer > 0) state.messageTimer -= dt;
     if (state.honkTimer > 0) state.honkTimer -= dt;
+    if (state.alarmTimer > 0) state.alarmTimer -= dt;
+    // The night rolls on: dusk deepens toward midnight, then pales to dawn.
+    // It moves in attract mode too, so the title screen's city darkens as well.
+    state.clock = (state.clock + dt / CLOCK_DAY_SECONDS) % 1;
     // Age the crash puffs and exhaust smoke, and drop the dead ones.
     for (const p of state.particles) {
       p.life -= dt;
@@ -449,6 +556,12 @@ export function createWorld(rng, seed) {
     if (state.busted || state.completed) {
       // The world idles behind the end screen.
       return events;
+    }
+
+    // R cycles the pirate radio, on foot or behind the wheel.
+    if (input.radio) {
+      state.station = (state.station + 1) % STATIONS.length;
+      say(`Radio: ${STATIONS[state.station].name} — ${STATIONS[state.station].blurb}`);
     }
 
     const player = state.player;
@@ -538,6 +651,11 @@ export function createWorld(rng, seed) {
     events |= updatePolice(dt);
     if (state.busted) return events | EVENT_BUSTED;
 
+    // The vault drill and the last run's countdown tick with the world.
+    events |= updateVault(dt);
+    if (state.completed) return events | EVENT_COMPLETE;
+    updateMissionTimer(dt);
+
     // Wanted level cools off when the player stays clean and out of sight.
     if (state.wanted > 0) {
       const copNear = state.police.some((cop) => dist(cop.x, cop.y, player.x, player.y) < WANTED_SIGHT_RANGE);
@@ -568,6 +686,11 @@ export function createWorld(rng, seed) {
     state.cash = save.cash || 0;
     state.missionIndex = Math.min(save.missionIndex || 0, MISSIONS.length - 1);
     if (save.completed) { state.completed = true; state.missionIndex = MISSIONS.length; }
+    // A saved last run restarts its countdown from the top — the boat waits
+    // for no one, but the save should not load into an expired timer.
+    if (!state.completed && MISSIONS[state.missionIndex]?.id === 'lastrun') state.missionTimer = LAST_RUN_SECONDS;
+    state.vaultCracking = false;
+    state.vaultProgress = 0;
   }
 
   function toSave() {

@@ -1,5 +1,6 @@
 // Original synth sound, made with WebAudio only — no audio files, no network.
-// Engine hum follows the car's speed, a two-tone siren follows the wanted level.
+// Engine hum follows the car's speed, a two-tone siren follows the wanted level,
+// and a three-station pirate radio plays tiny synth patterns under it all.
 export function createAudio() {
   let ctx = null;
   let engineOsc = null;
@@ -78,6 +79,42 @@ export function createAudio() {
     }
   }
 
+  // The pirate radio: three stations, each a tiny step sequencer of MIDI notes
+  // (69 is A4 = 440 Hz). The sequencer is driven from update(), so it plays
+  // only while the game runs and the sound is on.
+  const RADIO_PATTERNS = [
+    // SOLMAR FM 88.5 — SUNSET SYNTH: a minor-key arpeggio that climbs and falls.
+    { bpm: 96, wave: 'sawtooth', notes: [57, 60, 64, 69, 64, 60, 57, 52] },
+    // PALM 101.2 — LO-FI NIGHTS: slow mellow chords, one note per step.
+    { bpm: 72, wave: 'triangle', notes: [48, 55, 52, 59, 53, 57, 50, 55] },
+    // TROPICANA 94.7 — SALSA CALIENTE: a quick montuno figure.
+    { bpm: 120, wave: 'square', notes: [60, 64, 67, 72, 67, 64, 60, 67, 64, 60, 55, 60] },
+  ];
+  let radioStep = 0;
+  let radioNext = 0;
+  let radioStation = -1;
+
+  function radioTick(station) {
+    const pattern = RADIO_PATTERNS[station] ?? RADIO_PATTERNS[0];
+    if (station !== radioStation) {
+      // A new station restarts its figure from the first note.
+      radioStation = station;
+      radioStep = 0;
+      radioNext = 0;
+    }
+    const stepSeconds = 60 / pattern.bpm / 2;
+    if (radioNext === 0) radioNext = ctx.currentTime + 0.05;
+    // After a pause the clock has run on: do not burst a backlog of notes.
+    if (radioNext < ctx.currentTime - 0.5) radioNext = ctx.currentTime + 0.05;
+    while (radioNext <= ctx.currentTime + 0.15) {
+      const note = pattern.notes[radioStep % pattern.notes.length];
+      const freq = 440 * Math.pow(2, (note - 69) / 12);
+      blip(freq, stepSeconds * 0.9, pattern.wave, 0.045);
+      radioStep += 1;
+      radioNext += stepSeconds;
+    }
+  }
+
   return {
     start,
     /** Mute or unmute everything; the engine and siren obey it on the next update. */
@@ -106,13 +143,23 @@ export function createAudio() {
     busted() { blip(330, 0.3, 'sawtooth', 0.12); setTimeout(() => blip(165, 0.5, 'sawtooth', 0.12), 220); },
     /** A soft UI click for menu confirms. */
     click() { blip(880, 0.06, 'sine', 0.08); },
+    /** Three wails of the vault alarm: high-low, high-low, high-low. */
+    alarm() {
+      for (let i = 0; i < 3; i += 1) {
+        setTimeout(() => blip(880, 0.18, 'square', 0.1), i * 360);
+        setTimeout(() => blip(622, 0.18, 'square', 0.1), i * 360 + 180);
+      }
+    },
+    /** The drill's tick while the vault cracks. */
+    tick() { blip(1200, 0.05, 'square', 0.06); },
     /** speed01: 0..1 while driving, 0 on foot. wanted: current wanted level. */
-    update(speed01, wanted) {
+    update(speed01, wanted, station = 0) {
       if (!ctx || ctx.state !== 'running' || muted) return;
       try {
         engineGain.gain.value = speed01 > 0.02 ? 0.03 + speed01 * 0.05 : 0;
         engineOsc.frequency.value = 50 + speed01 * 130;
         sirenGain.gain.value = wanted > 0 ? 0.02 + wanted * 0.006 : 0;
+        radioTick(station);
       } catch {
         // Ignore audio glitches.
       }
