@@ -52,9 +52,9 @@ export function missionRoutePoints(state) {
     let mid = ROAD_AXES_H[0];
     for (const axis of ROAD_AXES_H) if (Math.abs(axis - ePoint.y) < Math.abs(mid - ePoint.y)) mid = axis;
     points.push({ x: s.axis, y: mid }, { x: e.axis, y: mid });
-  } else if (s.vertical && e.horizontal) {
+  } else if (s.vertical && !e.vertical) {
     points.push({ x: s.axis, y: e.axis });
-  } else if (s.horizontal && e.vertical) {
+  } else if (!s.vertical && e.vertical) {
     points.push({ x: e.axis, y: s.axis });
   } else {
     // Both roads run east-west: cross on the avenue nearest the target.
@@ -561,7 +561,7 @@ export function createRenderer(canvas) {
     ctx.fillText(state.completed ? 'JOB DONE' : mission.title, 24, 100);
     ctx.fillStyle = '#ffffff';
     ctx.font = `13px ${BODY_FONT}`;
-    const text = state.completed ? 'All three jobs finished. Solmar is yours — keep driving.' : mission.text;
+    const text = state.completed ? 'All five jobs finished. Solmar is yours — keep driving.' : mission.text;
     wrapText(text, 24, 118, 306, 16);
     if (state.nearTarget && !state.completed && !state.vaultCracking) {
       ctx.fillStyle = '#ffd23e';
